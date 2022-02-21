@@ -1,0 +1,86 @@
+version: '3'
+
+networks:
+  traefik_network:
+  nextcloud:
+
+volumes:
+  nextcloud:
+  mariadb_nc:
+
+services:
+  mariadb_nc:
+    image: mariadb
+    container_name: mariadb_nc
+    restart: always
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW --innodb-file-per-table=1 --skip-innodb-read-only-compressed
+    networks:
+      - nextcloud
+    volumes:
+      - mariadb_nc:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+
+  redis_nc:
+    image: redis:alpine
+    container_name: redis_nc
+    command: redis-server --requirepass ${REDIS_HOST_PASSWORD}
+    hostname: ${REDIS_HOST}
+#test#    privileged: true
+#test#   command: /bin/sh -c "sysctl vm.overcommit_memory=1"
+    restart: always
+    networks:
+      - nextcloud
+
+  nextcloud:
+    image: nextcloud
+    container_name: nextcloud
+    restart: always
+    networks:
+      - nextcloud
+      - traefik_network
+    ports:
+      - 8080:80
+    links:
+      - mariadb_nc
+    depends_on:
+      - redis_nc
+      - mariadb_nc
+    volumes:
+      - nextcloud:/var/www/html
+      - ./apache2.conf:/etc/apache2/apache2.conf
+      - ./config.php:/var/www/html/config/config.php
+    environment:
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_HOST=${MYSQL_HOST}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_HOST_PASSWORD=${REDIS_HOST_PASSWORD}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_network"
+      - "traefik.http.routers.cloud.entrypoints=web,websecure"
+      - "traefik.http.routers.cloud.rule=Host(`sub.domain.fr`)"
+      - "traefik.http.services.cloud.loadbalancer.server.port=80"
+      - "traefik.http.routers.cloud.tls=true"
+      - "traefik.http.routers.cloud.tls.certresolver=leresolver"
+
+      - traefik.http.routers.cloud.middlewares=cloud,cloud_redirect
+      - traefik.http.middlewares.cloud.headers.customFrameOptionsValue=ALLOW-FROM https://domain.com
+      - traefik.http.middlewares.cloud.headers.contentSecurityPolicy=frame-ancestors 'self' domain.com *.domain.com
+      - traefik.http.middlewares.cloud.headers.stsSeconds=155520001
+      - traefik.http.middlewares.cloud.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.cloud.headers.stsPreload=true
+      - traefik.http.middlewares.cloud_redirect.redirectregex.regex=/.well-known/(card|cal)dav
+      - traefik.http.middlewares.cloud_redirect.redirectregex.replacement=/remote.php/dav/
+
+networks:
+  traefik_network:
+    external: true
+  nextcloud:
+    internal: true
+
